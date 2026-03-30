@@ -197,24 +197,27 @@ canvas { display: block; position: fixed; inset: 0; }
 #info-panel .close-btn:hover { color: rgba(200,210,240,0.8); }
 
 #title-overlay {
-  position: fixed; top: 30px; left: 50%; transform: translateX(-50%); z-index: 50;
-  font-size: 28px; font-weight: 300; letter-spacing: 6px; text-transform: uppercase;
-  color: rgba(200,210,240,0.8); text-shadow: 0 0 30px rgba(100,140,255,0.3);
-  animation: fadeTitle 4s ease 2s forwards;
+  position: fixed; top: 24px; left: 50%; transform: translateX(-50%); z-index: 50;
+  font-size: 36px; font-weight: 200; letter-spacing: 8px; text-transform: uppercase;
+  color: rgba(200,210,240,0.85); text-shadow: 0 0 30px rgba(100,140,255,0.3);
+  transition: color 0.5s, text-shadow 0.5s;
+  text-align: center; pointer-events: none;
 }
-@keyframes fadeTitle { to { opacity: 0; } }
+#title-overlay.live {
+  color: rgba(255, 80, 80, 0.9);
+  text-shadow: 0 0 30px rgba(255, 60, 60, 0.4), 0 0 60px rgba(255, 40, 40, 0.15);
+}
 
 #live-banner {
-  position: fixed; top: 70px; left: 50%; transform: translateX(-50%); z-index: 50;
-  font-size: 14px; font-weight: 300; letter-spacing: 2px;
-  color: rgba(68, 221, 102, 0.8); text-shadow: 0 0 20px rgba(68, 221, 102, 0.3);
-  white-space: nowrap; display: none;
-  animation: fadeBannerIn 1s ease forwards;
+  position: fixed; top: 68px; left: 50%; transform: translateX(-50%); z-index: 50;
+  font-size: 13px; font-weight: 300; letter-spacing: 2px;
+  color: rgba(68, 221, 102, 0.7); text-shadow: 0 0 15px rgba(68, 221, 102, 0.25);
+  white-space: nowrap; opacity: 0; transition: opacity 0.5s;
+  pointer-events: none;
 }
 #live-banner.visible {
-  display: block;
+  opacity: 1;
 }
-@keyframes fadeBannerIn { from { opacity: 0; } to { opacity: 1; } }
 
 #controls-hint {
   position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 50;

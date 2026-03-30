@@ -892,10 +892,12 @@ function enableLiveMode() {
   document.getElementById('stop-btn').disabled = true;
   document.getElementById('stop-btn').style.opacity = '0.3';
 
-  // Live indicator
+  // Live indicator + title
   document.getElementById('live-dot').classList.add('active');
   document.getElementById('live-status').classList.add('active');
   document.getElementById('live-status').textContent = 'LIVE \u2014 real positions right now';
+  document.getElementById('title-overlay').textContent = 'Live';
+  document.getElementById('title-overlay').classList.add('live');
   document.getElementById('live-banner').classList.add('visible');
 
   // Enable tracking controls
@@ -921,9 +923,11 @@ function disableLiveMode() {
   document.getElementById('stop-btn').disabled = false;
   document.getElementById('stop-btn').style.opacity = '1';
 
-  // Live indicator off
+  // Live indicator off + title
   document.getElementById('live-dot').classList.remove('active');
   document.getElementById('live-status').classList.remove('active');
+  document.getElementById('title-overlay').textContent = 'Interactive Solar System';
+  document.getElementById('title-overlay').classList.remove('live');
   document.getElementById('live-banner').classList.remove('visible');
 
   // Disable tracking controls and hide all tracked objects
