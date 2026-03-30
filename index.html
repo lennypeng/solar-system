@@ -77,6 +77,44 @@ canvas { display: block; position: fixed; inset: 0; }
   font-size: 12px; color: rgba(140, 165, 220, 0.7);
   min-width: 32px; text-align: right; font-variant-numeric: tabular-nums;
 }
+/* Live mode indicator */
+.live-dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: rgba(80, 80, 80, 0.4); margin-right: 6px; vertical-align: middle;
+  transition: all 0.3s;
+}
+.live-dot.active {
+  background: #FF3333;
+  box-shadow: 0 0 8px rgba(255, 50, 50, 0.7), 0 0 16px rgba(255, 50, 50, 0.3);
+  animation: livePulse 1.5s ease-in-out infinite;
+}
+@keyframes livePulse {
+  0%, 100% { box-shadow: 0 0 8px rgba(255,50,50,0.7), 0 0 16px rgba(255,50,50,0.3); }
+  50% { box-shadow: 0 0 12px rgba(255,50,50,0.9), 0 0 24px rgba(255,50,50,0.5); }
+}
+.toggle-switch.live-toggle.on {
+  background: rgba(200, 50, 50, 0.4); border-color: rgba(255, 80, 80, 0.5);
+}
+.toggle-switch.live-toggle.on::after {
+  background: rgba(255, 100, 100, 0.95);
+  box-shadow: 0 0 8px rgba(255, 80, 80, 0.5);
+}
+
+.ctrl-live-status {
+  font-size: 10px; color: rgba(100, 140, 200, 0.4);
+  text-align: center; margin-top: 4px; display: none;
+}
+.ctrl-live-status.active {
+  display: block; color: rgba(255, 100, 100, 0.8);
+}
+
+/* Disabled tracking controls when live mode is off */
+#tracking-controls.disabled {
+  opacity: 0.3; pointer-events: none;
+}
+#tracking-header.disabled {
+  opacity: 0.3;
+}
 .ctrl-speed-display {
   text-align: center; margin-bottom: 8px; padding: 6px 0;
   background: rgba(30, 40, 70, 0.4); border-radius: 6px;
@@ -128,16 +166,20 @@ canvas { display: block; position: fixed; inset: 0; }
 /* ===== INFO PANEL ===== */
 #info-panel {
   position: fixed; z-index: 100;
-  top: 50%; left: 30px; transform: translateY(-50%);
+  bottom: 24px; left: 50%; transform: translateX(-50%);
   background: rgba(8, 10, 30, 0.92); border: 1px solid rgba(100, 140, 255, 0.35);
-  border-radius: 14px; padding: 20px 24px; backdrop-filter: blur(12px);
-  max-width: 360px; width: 340px; opacity: 0; transition: opacity 0.25s;
+  border-radius: 14px; padding: 18px 24px; backdrop-filter: blur(12px);
+  max-width: 460px; width: auto; min-width: 340px; opacity: 0; transition: opacity 0.25s;
   box-shadow: 0 8px 32px rgba(0,0,0,0.5); pointer-events: none;
+}
+#info-panel .info-grid {
+  display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-size: 13px;
+  max-height: 200px; overflow-y: auto;
 }
 #info-panel.visible { opacity: 1; pointer-events: auto; }
 #info-panel.always-visible { opacity: 1; pointer-events: auto; }
 #info-panel h2 { font-size: 22px; margin-bottom: 12px; font-weight: 600; }
-#info-panel .info-grid { display: grid; grid-template-columns: auto 1fr; gap: 5px 14px; font-size: 13px; }
+/* info-grid styles are in the #info-panel block above */
 #info-panel .info-label { color: rgba(180,190,220,0.7); white-space: nowrap; }
 #info-panel .info-value { color: #e0e4ef; }
 #info-panel .fun-fact { margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(100,140,255,0.15); font-style: italic; font-size: 12.5px; color: rgba(200,210,240,0.75); line-height: 1.5; }
@@ -161,6 +203,18 @@ canvas { display: block; position: fixed; inset: 0; }
   animation: fadeTitle 4s ease 2s forwards;
 }
 @keyframes fadeTitle { to { opacity: 0; } }
+
+#live-banner {
+  position: fixed; top: 70px; left: 50%; transform: translateX(-50%); z-index: 50;
+  font-size: 14px; font-weight: 300; letter-spacing: 2px;
+  color: rgba(68, 221, 102, 0.8); text-shadow: 0 0 20px rgba(68, 221, 102, 0.3);
+  white-space: nowrap; display: none;
+  animation: fadeBannerIn 1s ease forwards;
+}
+#live-banner.visible {
+  display: block;
+}
+@keyframes fadeBannerIn { from { opacity: 0; } to { opacity: 1; } }
 
 #controls-hint {
   position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 50;
@@ -189,24 +243,80 @@ canvas { display: block; position: fixed; inset: 0; }
   max-width: 500px; text-align: center; line-height: 1.5;
 }
 
+/* ===== SPACECRAFT LIST ===== */
+#spacecraft-list {
+  position: fixed; top: 80px; left: 20px; z-index: 90;
+  display: none; max-height: 60vh; overflow-y: auto;
+}
+#spacecraft-list.visible { display: block; }
+#spacecraft-list .sc-header {
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 2px;
+  color: rgba(100, 140, 220, 0.5); margin-bottom: 8px;
+}
+#spacecraft-list .sc-item {
+  display: flex; align-items: center; gap: 8px; padding: 6px 12px;
+  background: rgba(8, 12, 30, 0.75); border: 1px solid rgba(60, 90, 180, 0.15);
+  border-radius: 8px; margin-bottom: 4px; cursor: pointer;
+  backdrop-filter: blur(8px); transition: all 0.2s; min-width: 200px;
+}
+#spacecraft-list .sc-item:hover {
+  background: rgba(20, 30, 60, 0.9); border-color: rgba(80, 120, 220, 0.4);
+  transform: translateX(3px);
+}
+#spacecraft-list .sc-item.active {
+  background: rgba(30, 45, 80, 0.9); border-color: rgba(100, 150, 255, 0.5);
+}
+#spacecraft-list .sc-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  box-shadow: 0 0 6px currentColor;
+}
+#spacecraft-list .sc-name {
+  font-size: 12px; color: rgba(200, 210, 240, 0.9); flex: 1;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#spacecraft-list .sc-dist {
+  font-size: 10px; color: rgba(130, 155, 210, 0.6);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+
 #fade-overlay {
   position: fixed; inset: 0; z-index: 150; background: #000;
   opacity: 0; pointer-events: none; transition: opacity 0.6s;
 }
 #fade-overlay.active { opacity: 1; }
+
+/* ===== TRACKING STATUS ===== */
+#tracking-status {
+  position: fixed; bottom: 20px; right: 20px; z-index: 100;
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; color: rgba(150,160,190,0.6);
+  pointer-events: none;
+}
+#tracking-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: rgba(100,100,100,0.5);
+  transition: background 0.3s;
+}
+#tracking-dot.loading { background: #DDAA44; box-shadow: 0 0 6px rgba(221,170,68,0.5); }
+#tracking-dot.ready { background: #44DD66; box-shadow: 0 0 6px rgba(68,221,102,0.5); }
+#tracking-dot.partial { background: #DDAA44; box-shadow: 0 0 6px rgba(221,170,68,0.5); }
+#tracking-dot.error { background: #DD4444; box-shadow: 0 0 6px rgba(221,68,68,0.5); }
+#tracking-dot.fallback { background: #DD8844; box-shadow: 0 0 6px rgba(221,136,68,0.5); }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <div id="info-panel"></div>
 <div id="title-overlay">Solar System</div>
+<div id="spacecraft-list"></div>
+<div id="live-banner">All positions are live from NASA ephemeris data — enjoy exploring</div>
 <div id="controls-hint">Drag to rotate &middot; Scroll to zoom (follows cursor) &middot; Click any planet for info</div>
 
 <!-- CONTROL PANEL -->
 <div id="control-panel">
   <button id="panel-toggle"><span class="arrow">&#9654;</span></button>
   <div id="panel-body">
-    <h3>Controls</h3>
+    <h3>William Penguin's Mission Control</h3>
 
     <div class="ctrl-group">
       <div class="ctrl-row">
@@ -226,6 +336,23 @@ canvas { display: block; position: fixed; inset: 0; }
         <span class="ctrl-label">Pause Motion</span>
         <button class="ctrl-btn" id="stop-btn">Pause</button>
       </div>
+      <div class="ctrl-row">
+        <span class="ctrl-label">Reset View</span>
+        <button class="ctrl-btn" id="reset-view-btn">Reset</button>
+      </div>
+    </div>
+
+    <div class="ctrl-divider"></div>
+
+    <div class="ctrl-group">
+      <div class="ctrl-row">
+        <span class="ctrl-label">
+          <span class="live-dot" id="live-dot"></span>
+          Live Mode
+        </span>
+        <div class="toggle-switch live-toggle on" id="toggle-live-mode"></div>
+      </div>
+      <div class="ctrl-live-status" id="live-status">Real positions from J2000 ephemeris</div>
     </div>
 
     <div class="ctrl-divider"></div>
@@ -245,6 +372,32 @@ canvas { display: block; position: fixed; inset: 0; }
         <div class="toggle-switch" id="toggle-always-info"></div>
       </div>
     </div>
+
+    <div class="ctrl-divider"></div>
+    <h3 id="tracking-header">Live Tracking</h3>
+
+    <div class="ctrl-group" id="tracking-controls">
+      <div class="ctrl-row">
+        <span class="ctrl-label">Spacecraft</span>
+        <div class="toggle-switch on" id="toggle-spacecraft"></div>
+      </div>
+      <div class="ctrl-row">
+        <span class="ctrl-label">Comets</span>
+        <div class="toggle-switch on" id="toggle-comets"></div>
+      </div>
+      <div class="ctrl-row">
+        <span class="ctrl-label">Asteroids</span>
+        <div class="toggle-switch on" id="toggle-asteroids"></div>
+      </div>
+      <div class="ctrl-row">
+        <span class="ctrl-label">Near-Earth Objects</span>
+        <div class="toggle-switch" id="toggle-neos"></div>
+      </div>
+      <div class="ctrl-row">
+        <span class="ctrl-label">Meteor Showers</span>
+        <div class="toggle-switch" id="toggle-meteors"></div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -252,6 +405,7 @@ canvas { display: block; position: fixed; inset: 0; }
 <div id="surface-label"></div>
 <div id="surface-desc"></div>
 <div id="fade-overlay"></div>
+<div id="tracking-status"><div id="tracking-dot"></div><span id="tracking-label">Tracking: idle</span></div>
 
 <script type="importmap">
 { "imports": {

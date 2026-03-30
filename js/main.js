@@ -9,6 +9,10 @@ import {
   createSunTexture, createGlowTexture, createPlanetGlowTexture,
   createRingTexture, createTextSprite
 } from './textures.js';
+import { TrackingManager } from './tracking.js';
+import { createSpacecraftModel } from './spacecraft.js';
+import { createCometVisual, updateCometTail, createAsteroidVisual, createNEOVisual, createMeteorShowerMarker } from './smallbodies.js';
+import { SPACECRAFT_CATALOG, COMET_CATALOG, ASTEROID_CATALOG, METEOR_SHOWER_DATA } from './trackingdata.js';
 
 // ============== RENDERER ==============
 const canvas = document.getElementById('c');
@@ -30,7 +34,7 @@ const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.minDistance = 2;
-controls.maxDistance = 600;
+controls.maxDistance = 800;
 controls.zoomSpeed = 1.2;
 
 // ============== CURSOR-CENTERED ZOOM ==============
@@ -72,6 +76,9 @@ const clock = new THREE.Clock();
 let speedMultiplier = 0; // set from slider during init
 let paused = false;
 let savedSpeed = 0;
+let liveMode = false;
+const J2000_MS = Date.UTC(2000, 0, 1, 12, 0, 0); // J2000 epoch in ms
+const DEG2RAD = Math.PI / 180;
 let alwaysShowInfo = false;
 const hoverTargets = [];
 const pivots = [];
@@ -86,6 +93,21 @@ let surfaceComposer = null;
 let selectedBody = null;
 const planetGlowTex = createPlanetGlowTexture();
 const glowTex = createGlowTexture();
+
+// ============== TRACKING STATE ==============
+const trackingManager = new TrackingManager();
+const spacecraftGroups = [];   // {group, id, catalogEntry, label}
+const cometGroups = [];        // {group, id, catalogEntry, label, orbitLine}
+const asteroidGroups = [];     // {group, id, catalogEntry, label, orbitLine}
+const neoGroups = [];          // {group, id, data, label}
+const meteorGroups = [];       // {group, data, label}
+let flyToTarget = null;        // Vector3 for smooth camera target fly-to
+let flyToCamTarget = null;     // Vector3 for smooth camera position fly-to
+const spacecraftListEl = document.getElementById('spacecraft-list');
+let zoomedSpacecraft = null;
+let preZoomCameraPos = null;
+let preZoomTarget = null;
+let flyToStartPos = null;
 
 // ============== STARFIELD ==============
 {
@@ -205,29 +227,44 @@ for (let i = 1; i < BODIES.length; i++) {
   pivots.push({ pivot, body });
   meshes.push({ mesh, body, pivot, moonAnchor });
 
-  // Hit area for small planets
-  if (body.radius < 1.0) {
-    const hitMesh = new THREE.Mesh(
-      new THREE.SphereGeometry(body.radius * 2.5, 8, 8),
-      new THREE.MeshBasicMaterial({ visible: false })
-    );
-    hitMesh.userData.bodyData = body;
-    hitMesh.position.copy(mesh.position);
-    pivot.add(hitMesh);
-    hoverTargets.push(hitMesh);
-  } else {
-    hoverTargets.push(mesh);
-  }
+  // Enlarged hit area for all planets (minimum radius 2 units for easy clicking)
+  const hitRadius = Math.max(2, body.radius * 2);
+  const hitMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(hitRadius, 8, 8),
+    new THREE.MeshBasicMaterial({ visible: false })
+  );
+  hitMesh.userData.bodyData = body;
+  hitMesh.position.copy(mesh.position);
+  pivot.add(hitMesh);
+  hoverTargets.push(hitMesh);
 
   // Earth atmosphere
   if (body.name === 'Earth') {
     const atmoMat = new THREE.ShaderMaterial({
       uniforms: { glowColor: { value: new THREE.Color(0x4488FF) } },
-      vertexShader: `varying vec3 vNormal; void main() { vNormal = normalize(normalMatrix * normal); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-      fragmentShader: `uniform vec3 glowColor; varying vec3 vNormal; void main() { float i = pow(0.65 - dot(vNormal, vec3(0,0,1.0)), 2.5); gl_FragColor = vec4(glowColor, i * 0.7); }`,
-      side: THREE.FrontSide, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false
+      vertexShader: `
+        varying vec3 vNormal;
+        varying vec3 vViewDir;
+        void main() {
+          vNormal = normalize(normalMatrix * normal);
+          vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+          vViewDir = normalize(-mvPos.xyz);
+          gl_Position = projectionMatrix * mvPos;
+        }
+      `,
+      fragmentShader: `
+        uniform vec3 glowColor;
+        varying vec3 vNormal;
+        varying vec3 vViewDir;
+        void main() {
+          float rim = 1.0 - max(0.0, dot(vNormal, vViewDir));
+          float intensity = pow(rim, 3.0) * 1.2;
+          gl_FragColor = vec4(glowColor, intensity);
+        }
+      `,
+      side: THREE.BackSide, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false
     });
-    const atmo = new THREE.Mesh(new THREE.SphereGeometry(body.radius * 1.06, 48, 48), atmoMat);
+    const atmo = new THREE.Mesh(new THREE.SphereGeometry(body.radius * 1.12, 48, 48), atmoMat);
     atmo.raycast = () => {};
     mesh.add(atmo);
   }
@@ -288,8 +325,18 @@ for (let i = 1; i < BODIES.length; i++) {
       moonPivot.add(moonMesh);
       moonAnchor.add(moonPivot); // attach to non-rotating anchor, not planet mesh
 
+      // Enlarged hit area for moons (minimum 1 unit for easy clicking)
+      const moonHitRadius = Math.max(1, moonData.radius * 3);
+      const moonHit = new THREE.Mesh(
+        new THREE.SphereGeometry(moonHitRadius, 8, 8),
+        new THREE.MeshBasicMaterial({ visible: false })
+      );
+      moonHit.userData.bodyData = moonData;
+      moonHit.position.copy(moonMesh.position);
+      moonPivot.add(moonHit);
+
       allMoonPivots.push({ pivot: moonPivot, data: moonData });
-      hoverTargets.push(moonMesh);
+      hoverTargets.push(moonHit);
 
       // Moon orbit line (tracked for toggling)
       const moonOrbitGeo = new THREE.BufferGeometry();
@@ -323,6 +370,251 @@ for (let i = 1; i < BODIES.length; i++) {
   scene.add(new THREE.Points(geo, new THREE.PointsMaterial({ color: 0x888888, size: 0.3 })));
 }
 
+// ============== LIVE TRACKING ==============
+const trackingDot = document.getElementById('tracking-dot');
+const trackingLabel = document.getElementById('tracking-label');
+
+trackingManager.onStatusChange = (status) => {
+  trackingDot.className = status;
+  const labels = { idle: 'Tracking: idle', loading: 'Tracking: loading...', ready: 'Tracking: live', partial: 'Tracking: partial', error: 'Tracking: offline', fallback: 'Tracking: fallback' };
+  trackingLabel.textContent = labels[status] || 'Tracking: ' + status;
+};
+
+function initTracking() {
+  trackingManager.fetchAll().then(() => {
+    // Create spacecraft visuals
+    SPACECRAFT_CATALOG.forEach(entry => {
+      const isOnSurface = !!entry.parentBody;
+      let pos = trackingManager.getPosition(entry.id);
+
+      // For surface spacecraft, position at origin (will be child of planet)
+      if (isOnSurface) {
+        pos = { sx: 0, sy: 0, sz: 0 };
+      }
+      if (!pos) return;
+
+      // Scale spacecraft based on distance so they're always visible
+      const dist = isOnSurface ? meshes.find(m => m.body.name === entry.parentBody).body.orbitalRadius
+        : Math.sqrt(pos.sx * pos.sx + pos.sy * pos.sy + pos.sz * pos.sz);
+      // JWST gets moon-sized scale; others scale with distance
+      const isJWST = entry.id === '-170';
+      const scaleMultiplier = isJWST ? 0.7 : Math.max(3, dist * 0.04);
+
+      const model = createSpacecraftModel(entry.modelType);
+      const group = new THREE.Group();
+      group.add(model);
+      model.scale.multiplyScalar(scaleMultiplier);
+
+      // Glow sprite - JWST gets subtle glow, others scale with distance
+      const glowSize = isJWST ? 1.5 : Math.max(6, dist * 0.06);
+      const glow = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: planetGlowTex, color: entry.color,
+        blending: THREE.AdditiveBlending, transparent: true, depthWrite: false
+      }));
+      glow.scale.setScalar(glowSize);
+      glow.raycast = () => {};
+      glow.name = 'glow';
+      group.add(glow);
+
+      // Label - position above based on scale, clickable
+      const label = createTextSprite(entry.name, entry.color);
+      label.position.y = isJWST ? 1.5 : scaleMultiplier * 1.2;
+      if (isJWST) label.scale.set(10, 2.5, 1);
+      label.userData.bodyData = entry;
+      group.add(label);
+      hoverTargets.push(label);
+
+      // Invisible hit sphere for easy clicking - scale with distance
+      const hitRadius = isJWST ? 1.2 : Math.max(3, dist * 0.03);
+      const hitSphere = new THREE.Mesh(
+        new THREE.SphereGeometry(hitRadius, 8, 8),
+        new THREE.MeshBasicMaterial({ visible: false })
+      );
+      hitSphere.userData.bodyData = entry;
+      group.add(hitSphere);
+
+      group.userData.bodyData = entry;
+
+      if (isOnSurface) {
+        // Attach to planet's moonAnchor so it follows automatically
+        const parentEntry = meshes.find(m => m.body.name === entry.parentBody);
+        if (parentEntry && parentEntry.moonAnchor) {
+          group.position.set(0, 0, 0); // at planet center
+          parentEntry.moonAnchor.add(group);
+        } else {
+          group.position.set(pos.sx, pos.sy, pos.sz);
+          scene.add(group);
+        }
+      } else {
+        group.position.set(pos.sx, pos.sy, pos.sz);
+        scene.add(group);
+      }
+
+      hoverTargets.push(hitSphere);
+      spacecraftGroups.push({ group, id: entry.id, catalogEntry: entry, label });
+    });
+
+    // Create comet visuals
+    COMET_CATALOG.forEach(entry => {
+      const pos = trackingManager.getPosition(entry.id);
+      const group = createCometVisual(entry.color);
+
+      if (pos) {
+        group.position.set(pos.sx, pos.sy, pos.sz);
+        updateCometTail(group, pos);
+      }
+
+      // Label - clickable
+      const label = createTextSprite(entry.name, entry.color);
+      label.position.y = 2;
+      label.userData.bodyData = entry;
+      group.add(label);
+      hoverTargets.push(label);
+
+      group.userData.bodyData = entry;
+      const nucleus = group.getObjectByName('nucleus');
+      if (nucleus) {
+        nucleus.userData.bodyData = entry;
+        hoverTargets.push(nucleus);
+      }
+      scene.add(group);
+
+      // Draw orbit path
+      let orbitLine = null;
+      const orbitPts = trackingManager.computeOrbitPath(entry);
+      if (orbitPts) {
+        const orbitGeo = new THREE.BufferGeometry();
+        orbitGeo.setAttribute('position', new THREE.Float32BufferAttribute(orbitPts, 3));
+        orbitLine = new THREE.LineLoop(orbitGeo, new THREE.LineDashedMaterial({
+          color: entry.color, transparent: true, opacity: 0.35,
+          dashSize: 2, gapSize: 1
+        }));
+        orbitLine.computeLineDistances();
+        scene.add(orbitLine);
+      }
+
+      cometGroups.push({ group, id: entry.id, catalogEntry: entry, label, orbitLine });
+    });
+
+    // Create asteroid visuals
+    ASTEROID_CATALOG.forEach(entry => {
+      const pos = trackingManager.getPosition(entry.id);
+      const group = createAsteroidVisual(entry.color, 0.6);
+
+      if (pos) {
+        group.position.set(pos.sx, pos.sy, pos.sz);
+      }
+
+      // Label - clickable
+      const label = createTextSprite(entry.name, entry.color);
+      label.position.y = 1.5;
+      label.userData.bodyData = entry;
+      group.add(label);
+      hoverTargets.push(label);
+
+      group.userData.bodyData = entry;
+      group.children[0].userData.bodyData = entry;
+      hoverTargets.push(group.children[0]);
+      scene.add(group);
+
+      // Draw orbit path
+      let orbitLine = null;
+      const orbitPts = trackingManager.computeOrbitPath(entry);
+      if (orbitPts) {
+        const orbitGeo = new THREE.BufferGeometry();
+        orbitGeo.setAttribute('position', new THREE.Float32BufferAttribute(orbitPts, 3));
+        orbitLine = new THREE.LineLoop(orbitGeo, new THREE.LineDashedMaterial({
+          color: entry.color, transparent: true, opacity: 0.25,
+          dashSize: 1.5, gapSize: 1
+        }));
+        orbitLine.computeLineDistances();
+        scene.add(orbitLine);
+      }
+
+      asteroidGroups.push({ group, id: entry.id, catalogEntry: entry, label, orbitLine });
+    });
+
+    // Create NEO visuals (initially hidden, toggle defaults to off)
+    trackingManager.neoData.forEach(neoEntry => {
+      const group = createNEOVisual(neoEntry.color, neoEntry.isHazardous);
+
+      // Position NEOs near Earth based on miss distance
+      // Find Earth's current position in the scene
+      const earthPivot = pivots.find(p => p.body.name === 'Earth');
+      if (earthPivot) {
+        const earthAngle = earthPivot.pivot.rotation.y;
+        const earthR = 50; // Earth orbital radius
+        const missR = neoEntry.missDistance * 50; // Convert AU to scene units
+        const neoAngle = earthAngle + (Math.random() - 0.5) * 0.5;
+        group.position.set(
+          Math.sin(neoAngle) * (earthR + missR * 0.5),
+          (Math.random() - 0.5) * 2,
+          Math.cos(neoAngle) * (earthR + missR * 0.5)
+        );
+      }
+
+      // Label - clickable
+      const label = createTextSprite(neoEntry.name.replace(/[()]/g, ''), neoEntry.color);
+      label.position.y = 1;
+      label.userData.bodyData = neoEntry;
+      group.add(label);
+      hoverTargets.push(label);
+
+      group.userData.bodyData = neoEntry;
+      group.children[0].userData.bodyData = neoEntry;
+      hoverTargets.push(group.children[0]);
+      group.visible = false; // Default off
+      scene.add(group);
+
+      neoGroups.push({ group, id: neoEntry.id, data: neoEntry, label });
+    });
+
+    // Create meteor shower markers (initially hidden)
+    METEOR_SHOWER_DATA.forEach(shower => {
+      const group = createMeteorShowerMarker(shower.color);
+
+      // Position at a point on the ecliptic using RA as angle
+      const angle = (shower.radiantRA / 360) * Math.PI * 2;
+      const r = 55 + Math.random() * 30; // Between Earth and Mars orbits
+      group.position.set(
+        Math.sin(angle) * r,
+        (Math.random() - 0.5) * 3,
+        Math.cos(angle) * r
+      );
+
+      const bodyData = {
+        name: shower.name, color: shower.color,
+        info: { ...shower.info, 'Parent Body': shower.parent },
+        funFact: `The ${shower.name} meteor shower produces up to ${shower.ZHR} meteors per hour at its peak around ${shower.peak}.`
+      };
+
+      // Label - clickable
+      const label = createTextSprite(shower.name, shower.color);
+      label.position.y = 1.2;
+      label.userData.bodyData = bodyData;
+      group.add(label);
+      hoverTargets.push(label);
+
+      group.userData.bodyData = bodyData;
+      group.children[0].userData.bodyData = bodyData;
+      hoverTargets.push(group.children[0]);
+      group.visible = false; // Default off
+      scene.add(group);
+
+      meteorGroups.push({ group, data: shower, label });
+    });
+
+    console.log('Tracking initialized:', spacecraftGroups.length, 'spacecraft,', cometGroups.length, 'comets,', asteroidGroups.length, 'asteroids,', neoGroups.length, 'NEOs');
+    // Rebuild spacecraft list now that data is loaded
+    if (document.getElementById('toggle-spacecraft').classList.contains('on')) showSpacecraftList();
+  }).catch(err => {
+    console.error('Tracking initialization failed:', err);
+  });
+}
+
+// Start tracking
+initTracking();
+
 // ============== RAYCASTING & UI ==============
 const infoPanel = document.getElementById('info-panel');
 let frameCount = 0;
@@ -345,15 +637,31 @@ window.addEventListener('click', e => {
   if (currentView !== 'solar') return;
   if (infoPanel.contains(e.target)) return;
   if (document.getElementById('control-panel').contains(e.target)) return;
+  if (spacecraftListEl.contains(e.target)) return;
 
   raycaster.setFromCamera(mouse, camera);
   const hits = raycaster.intersectObjects(hoverTargets);
   if (hits.length > 0) {
     const body = hits[0].object.userData.bodyData;
-    if (body) { selectedBody = body; showInfoPanel(body); }
-  } else if (!alwaysShowInfo) {
-    selectedBody = null;
-    hideInfoPanel();
+    if (body) {
+      selectedBody = body;
+      showInfoPanel(body);
+
+      // Fly-to for tracked objects
+      if (body.type && ['spacecraft', 'comet', 'asteroid', 'neo'].includes(body.type)) {
+        const worldPos = new THREE.Vector3();
+        hits[0].object.getWorldPosition(worldPos);
+        flyToTarget = worldPos;
+      }
+    }
+  } else {
+    // Clicked empty space
+    if (zoomedSpacecraft) {
+      zoomOutFromSpacecraft();
+    } else if (!alwaysShowInfo) {
+      selectedBody = null;
+      hideInfoPanel();
+    }
   }
 });
 
@@ -464,6 +772,7 @@ function speedToSlider(mult) {
 
 function formatSpeed(mult) {
   if (paused) return { main: 'Paused', sub: '' };
+  if (liveMode) return { main: 'LIVE', sub: 'Real positions right now' };
   const realFactor = mult / REALTIME_MULT;
   if (realFactor <= 1.01) return { main: '1\u00d7 realtime', sub: '1 yr = 365.25 days' };
 
@@ -522,6 +831,15 @@ document.getElementById('stop-btn').addEventListener('click', () => {
   }
 });
 
+// Reset view
+document.getElementById('reset-view-btn').addEventListener('click', () => {
+  if (zoomedSpacecraft) zoomOutFromSpacecraft();
+  hideInfoPanel();
+  flyToTarget = new THREE.Vector3(0, 0, 0);
+  flyToCamTarget = new THREE.Vector3(80, 60, 120);
+  controls.target.set(0, 0, 0);
+});
+
 // Toggle planet orbits
 document.getElementById('toggle-planet-orbits').addEventListener('click', function() {
   this.classList.toggle('on');
@@ -545,6 +863,209 @@ document.getElementById('toggle-always-info').addEventListener('click', function
   } else {
     stopAlwaysInfo();
   }
+});
+
+// ============== LIVE MODE ==============
+function getLiveAngle(orbital) {
+  const daysSinceJ2000 = (Date.now() - J2000_MS) / 86400000;
+  const L = orbital.L0 + (360 / orbital.periodDays) * daysSinceJ2000;
+  return (L % 360) * DEG2RAD;
+}
+
+function enableLiveMode() {
+  liveMode = true;
+  savedSpeed = speedMultiplier;
+  speedMultiplier = REALTIME_MULT;
+  paused = false;
+
+  // Immediately snap all positions to live
+  pivots.forEach(({ pivot, body }) => {
+    if (body.orbital) pivot.rotation.y = getLiveAngle(body.orbital);
+  });
+  allMoonPivots.forEach(({ pivot, data }) => {
+    if (data.orbital) pivot.rotation.y = getLiveAngle(data.orbital);
+  });
+
+  // Disable speed controls
+  speedSlider.disabled = true;
+  speedSlider.style.opacity = '0.3';
+  document.getElementById('stop-btn').disabled = true;
+  document.getElementById('stop-btn').style.opacity = '0.3';
+
+  // Live indicator
+  document.getElementById('live-dot').classList.add('active');
+  document.getElementById('live-status').classList.add('active');
+  document.getElementById('live-status').textContent = 'LIVE \u2014 real positions right now';
+  document.getElementById('live-banner').classList.add('visible');
+
+  // Enable tracking controls
+  document.getElementById('tracking-controls').classList.remove('disabled');
+  document.getElementById('tracking-header').classList.remove('disabled');
+
+  // Show tracked objects
+  const scOn = document.getElementById('toggle-spacecraft').classList.contains('on');
+  spacecraftGroups.forEach(s => { s.group.visible = scOn; });
+  if (scOn) showSpacecraftList(); else hideSpacecraftList();
+  cometGroups.forEach(c => { c.group.visible = document.getElementById('toggle-comets').classList.contains('on'); if (c.orbitLine) c.orbitLine.visible = c.group.visible; });
+  asteroidGroups.forEach(a => { a.group.visible = document.getElementById('toggle-asteroids').classList.contains('on'); if (a.orbitLine) a.orbitLine.visible = a.group.visible; });
+
+  updateSpeedDisplay();
+}
+
+function disableLiveMode() {
+  liveMode = false;
+  speedMultiplier = 300000 * REALTIME_MULT; // Default to 300K× realtime
+  speedSlider.disabled = false;
+  speedSlider.style.opacity = '1';
+  speedSlider.value = speedToSlider(speedMultiplier);
+  document.getElementById('stop-btn').disabled = false;
+  document.getElementById('stop-btn').style.opacity = '1';
+
+  // Live indicator off
+  document.getElementById('live-dot').classList.remove('active');
+  document.getElementById('live-status').classList.remove('active');
+  document.getElementById('live-banner').classList.remove('visible');
+
+  // Disable tracking controls and hide all tracked objects
+  document.getElementById('tracking-controls').classList.add('disabled');
+  document.getElementById('tracking-header').classList.add('disabled');
+  spacecraftGroups.forEach(s => { s.group.visible = false; });
+  hideSpacecraftList();
+  cometGroups.forEach(c => { c.group.visible = false; if (c.orbitLine) c.orbitLine.visible = false; });
+  asteroidGroups.forEach(a => { a.group.visible = false; if (a.orbitLine) a.orbitLine.visible = false; });
+  neoGroups.forEach(n => { n.group.visible = false; });
+  meteorGroups.forEach(m => { m.group.visible = false; });
+
+  // Reset simTime so normal mode continues from live positions
+  const earthAngle = getLiveAngle(BODIES.find(b => b.name === 'Earth').orbital);
+  simTime = earthAngle / 1.0;
+
+  updateSpeedDisplay();
+}
+
+document.getElementById('toggle-live-mode').addEventListener('click', function() {
+  this.classList.toggle('on');
+  if (this.classList.contains('on')) enableLiveMode();
+  else disableLiveMode();
+});
+
+// Default to live mode on startup
+enableLiveMode();
+
+// ============== SPACECRAFT LIST ==============
+function buildSpacecraftList() {
+  if (spacecraftGroups.length === 0) { spacecraftListEl.innerHTML = ''; return; }
+  let html = '<div class="sc-header">Spacecraft</div>';
+  spacecraftGroups.forEach((s, idx) => {
+    const colorHex = '#' + s.catalogEntry.color.toString(16).padStart(6, '0');
+    const distStr = s.catalogEntry.info['Distance from Earth'] || '—';
+    html += `<div class="sc-item" data-sc-idx="${idx}">
+      <div class="sc-dot" style="color:${colorHex}; background:${colorHex}"></div>
+      <span class="sc-name">${s.catalogEntry.name}</span>
+      <span class="sc-dist">${distStr}</span>
+    </div>`;
+  });
+  spacecraftListEl.innerHTML = html;
+
+  // Attach click handlers
+  spacecraftListEl.querySelectorAll('.sc-item').forEach(item => {
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const idx = parseInt(item.dataset.scIdx);
+      const sc = spacecraftGroups[idx];
+      if (!sc) return;
+
+      // Clear all highlights first
+      spacecraftListEl.querySelectorAll('.sc-item').forEach(i => i.classList.remove('active'));
+
+      if (zoomedSpacecraft === sc) {
+        // Already zoomed in — zoom out
+        zoomOutFromSpacecraft();
+        return;
+      }
+
+      zoomToSpacecraft(sc);
+      item.classList.add('active');
+    });
+  });
+}
+
+function zoomToSpacecraft(sc) {
+  // Save current camera state
+  if (!zoomedSpacecraft) {
+    preZoomCameraPos = camera.position.clone();
+    preZoomTarget = controls.target.clone();
+  }
+  zoomedSpacecraft = sc;
+
+  // Get world position of spacecraft
+  const worldPos = new THREE.Vector3();
+  sc.group.getWorldPosition(worldPos);
+
+  // Animate camera toward it
+  const offset = new THREE.Vector3(5, 3, 5);
+  const targetCamPos = worldPos.clone().add(offset);
+
+  // Use smooth lerp via flyTo
+  flyToTarget = worldPos.clone();
+  flyToCamTarget = targetCamPos;
+
+  // Show info panel
+  showInfoPanel(sc.catalogEntry);
+}
+
+function zoomOutFromSpacecraft() {
+  if (!preZoomCameraPos) return;
+  zoomedSpacecraft = null;
+
+  // Fly back to saved position
+  flyToTarget = preZoomTarget.clone();
+  flyToCamTarget = preZoomCameraPos.clone();
+
+  spacecraftListEl.querySelectorAll('.sc-item').forEach(i => i.classList.remove('active'));
+  hideInfoPanel();
+
+  // Clear saved state after animation settles
+  setTimeout(() => { preZoomCameraPos = null; preZoomTarget = null; }, 2000);
+}
+
+function showSpacecraftList() {
+  buildSpacecraftList();
+  spacecraftListEl.classList.add('visible');
+}
+
+function hideSpacecraftList() {
+  spacecraftListEl.classList.remove('visible');
+  if (zoomedSpacecraft) zoomOutFromSpacecraft();
+}
+
+// Toggle tracking layers
+document.getElementById('toggle-spacecraft').addEventListener('click', function() {
+  this.classList.toggle('on');
+  const visible = this.classList.contains('on');
+  spacecraftGroups.forEach(s => { s.group.visible = visible; });
+  if (visible) showSpacecraftList();
+  else hideSpacecraftList();
+});
+document.getElementById('toggle-comets').addEventListener('click', function() {
+  this.classList.toggle('on');
+  const visible = this.classList.contains('on');
+  cometGroups.forEach(c => { c.group.visible = visible; if (c.orbitLine) c.orbitLine.visible = visible; });
+});
+document.getElementById('toggle-asteroids').addEventListener('click', function() {
+  this.classList.toggle('on');
+  const visible = this.classList.contains('on');
+  asteroidGroups.forEach(a => { a.group.visible = visible; if (a.orbitLine) a.orbitLine.visible = visible; });
+});
+document.getElementById('toggle-neos').addEventListener('click', function() {
+  this.classList.toggle('on');
+  const visible = this.classList.contains('on');
+  neoGroups.forEach(n => { n.group.visible = visible; });
+});
+document.getElementById('toggle-meteors').addEventListener('click', function() {
+  this.classList.toggle('on');
+  const visible = this.classList.contains('on');
+  meteorGroups.forEach(m => { m.group.visible = visible; });
 });
 
 // ============== SURFACE VIEW ==============
@@ -826,6 +1347,7 @@ let lastFrameTime = performance.now() / 1000;
 
 function animate() {
   requestAnimationFrame(animate);
+  try {
   const now = performance.now() / 1000;
   const dt = now - lastFrameTime;
   lastFrameTime = now;
@@ -834,10 +1356,83 @@ function animate() {
   if (!paused) simTime += dt * speedMultiplier;
 
   if (currentView === 'solar') {
-    pivots.forEach(({ pivot, body }) => { pivot.rotation.y = simTime * body.orbitalSpeed; });
-    meshes.forEach(({ mesh, body }) => { mesh.rotation.y = simTime * body.rotationSpeed * 50; }); // self-rotation scales with sim time
-    allMoonPivots.forEach(({ pivot, data }) => { pivot.rotation.y = simTime * data.speed; });
+    // Position updates - live mode uses real ephemeris, normal mode uses simTime
+    pivots.forEach(({ pivot, body }) => {
+      pivot.rotation.y = liveMode && body.orbital
+        ? getLiveAngle(body.orbital)
+        : simTime * body.orbitalSpeed;
+    });
+    allMoonPivots.forEach(({ pivot, data }) => {
+      pivot.rotation.y = liveMode && data.orbital
+        ? getLiveAngle(data.orbital)
+        : simTime * data.speed;
+    });
+    meshes.forEach(({ mesh, body }) => {
+      mesh.rotation.y = liveMode
+        ? now * body.rotationSpeed * 0.5
+        : simTime * body.rotationSpeed * 50;
+    });
     if (sunGlow) sunGlow.scale.setScalar(28 * (1 + Math.sin(now * 2) * 0.05));
+
+    // Update tracked object positions
+    spacecraftGroups.forEach(s => {
+      if (!s.group.visible) return;
+
+      // Update position from tracking (surface spacecraft are children of planet, no update needed)
+      if (!s.catalogEntry.parentBody) {
+        const pos = trackingManager.getPosition(s.id);
+        if (pos) {
+          s.group.position.set(pos.sx, pos.sy, pos.sz);
+        }
+      }
+      // Pulsing glow
+      const glow = s.group.getObjectByName('glow');
+      if (glow) glow.scale.setScalar(4 * (1 + Math.sin(now * 3) * 0.2));
+    });
+
+    cometGroups.forEach(c => {
+      if (!c.group.visible) return;
+      const pos = trackingManager.getPosition(c.id);
+      if (pos) {
+        c.group.position.set(pos.sx, pos.sy, pos.sz);
+        updateCometTail(c.group, pos);
+      }
+    });
+
+    asteroidGroups.forEach(a => {
+      if (!a.group.visible) return;
+      const pos = trackingManager.getPosition(a.id);
+      if (pos) {
+        a.group.position.set(pos.sx, pos.sy, pos.sz);
+      }
+      // Slow rotation
+      a.group.children[0].rotation.y += 0.005;
+    });
+
+    // Animate NEO warning rings
+    neoGroups.forEach(n => {
+      if (!n.group.visible) return;
+      const ring = n.group.getObjectByName('warningRing');
+      if (ring) {
+        ring.rotation.z += 0.02;
+        ring.material.opacity = 0.3 + Math.sin(now * 4) * 0.2;
+      }
+    });
+
+    // Fly-to camera animation
+    if (flyToTarget) {
+      controls.target.lerp(flyToTarget, 0.04);
+      if (controls.target.distanceTo(flyToTarget) < 0.5) {
+        flyToTarget = null;
+      }
+    }
+    if (flyToCamTarget) {
+      camera.position.lerp(flyToCamTarget, 0.04);
+      if (camera.position.distanceTo(flyToCamTarget) < 0.5) {
+        flyToCamTarget = null;
+      }
+    }
+
     checkHover();
     controls.update();
     composer.render();
@@ -874,8 +1469,12 @@ function animate() {
   } else {
     renderer.render(scene, camera);
   }
+  } catch(e) { console.error('ANIMATE ERROR:', e.message, e.stack); }
 }
 animate();
+
+// Debug: expose key objects for console inspection
+window._solar = { scene, pivots, meshes, allMoonPivots, spacecraftGroups, trackingManager, hoverTargets, liveMode: () => liveMode, speedMultiplier: () => speedMultiplier };
 
 // ============== RESIZE ==============
 window.addEventListener('resize', () => {

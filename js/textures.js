@@ -29,7 +29,7 @@ export function generatePlanetTexture(name, w, h) {
       const ny = Math.sin(lat);
       const nz = Math.cos(lat) * Math.sin(lon);
       let r, g, b;
-      const n1 = fbm(nx * 3, nz * 3, 6);
+      const n1 = fbm(nx * 3 + 1.7, nz * 3 + 2.3, 6);
       const n2 = fbm(nx * 5 + 10, nz * 5 + 10, 4);
       const n3 = fbm(nx * 8 + 20, ny * 8 + 20, 5);
 
@@ -46,7 +46,12 @@ export function generatePlanetTexture(name, w, h) {
         const elev = n1 * 1.2 - 0.1;
         const pole = Math.abs(ny) > 0.75;
         if (pole) { r = 240; g = 245; b = 255; }
-        else if (elev < 0.42) { const depth = 0.6 + elev * 0.5; r = 20 * depth; g = 60 * depth; b = 180 * depth; }
+        else if (elev < 0.42) {
+          // Ocean - depth variation but never too dark
+          const depth = Math.max(0.75, 0.6 + elev * 0.4);
+          const shallowMix = Math.max(0, (elev - 0.3) * 8); // lighter near coast
+          r = 15 + shallowMix * 30; g = 45 * depth + shallowMix * 40; b = 140 * depth + 40;
+        }
         else if (elev < 0.48) { r = 194; g = 178; b = 128; }
         else if (elev < 0.65) { const g2 = n2 * 0.3; r = 40 + g2 * 60; g = 100 + n1 * 50; b = 30 + g2 * 20; }
         else { const mt = 0.6 + n3 * 0.3; r = 140 * mt; g = 130 * mt; b = 110 * mt; }
