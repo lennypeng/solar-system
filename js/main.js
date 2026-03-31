@@ -335,7 +335,7 @@ for (let i = 1; i < BODIES.length; i++) {
       moonHit.position.copy(moonMesh.position);
       moonPivot.add(moonHit);
 
-      allMoonPivots.push({ pivot: moonPivot, data: moonData });
+      allMoonPivots.push({ pivot: moonPivot, data: moonData, parentBody: body });
       hoverTargets.push(moonHit);
 
       // Moon orbit line (tracked for toggling)
@@ -882,8 +882,10 @@ function enableLiveMode() {
   pivots.forEach(({ pivot, body }) => {
     if (body.orbital) pivot.rotation.y = getLiveAngle(body.orbital);
   });
-  allMoonPivots.forEach(({ pivot, data }) => {
-    if (data.orbital) pivot.rotation.y = getLiveAngle(data.orbital);
+  allMoonPivots.forEach(({ pivot, data, parentBody }) => {
+    if (data.orbital && parentBody.orbital) {
+      pivot.rotation.y = getLiveAngle(data.orbital) - getLiveAngle(parentBody.orbital);
+    }
   });
 
   // Disable speed controls
@@ -1366,10 +1368,14 @@ function animate() {
         ? getLiveAngle(body.orbital)
         : simTime * body.orbitalSpeed;
     });
-    allMoonPivots.forEach(({ pivot, data }) => {
-      pivot.rotation.y = liveMode && data.orbital
+    allMoonPivots.forEach(({ pivot, data, parentBody }) => {
+      const parentAngle = liveMode && parentBody.orbital
+        ? getLiveAngle(parentBody.orbital)
+        : simTime * parentBody.orbitalSpeed;
+      const moonAngle = liveMode && data.orbital
         ? getLiveAngle(data.orbital)
         : simTime * data.speed;
+      pivot.rotation.y = moonAngle - parentAngle;
     });
     meshes.forEach(({ mesh, body }) => {
       mesh.rotation.y = liveMode
